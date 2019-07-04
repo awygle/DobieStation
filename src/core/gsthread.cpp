@@ -2115,9 +2115,9 @@ void GraphicsSynthesizerThread::render_triangle2() {
     order3(unsortedVerts[0].y, unsortedVerts[1].y, unsortedVerts[2].y, order);
 
     // convert all vertex data to floating point, converts position to floating point pixels
-    VertexF v0(unsortedVerts[order[0]]);
-    VertexF v1(unsortedVerts[order[1]]);
-    VertexF v2(unsortedVerts[order[2]]);
+    VertexF v0(unsortedVerts[order[0]], current_PRMODE);
+    VertexF v1(unsortedVerts[order[1]], current_PRMODE);
+    VertexF v2(unsortedVerts[order[2]], current_PRMODE);
 
     // COMMONLY USED VALUES
 
@@ -2126,7 +2126,7 @@ void GraphicsSynthesizerThread::render_triangle2() {
     //                        OR
     //             * v2                 * v2
     // the other orientations of single triangle (where v1 v2 is horizontal) works fine.
-    bool lower_tri_only = (v0.y == v1.y);
+    bool lower_tri_only = (v0.coord.y == v1.coord.y);
 
     // the edge e21 is the edge from v1 -> v2.  So v1 + e21 = v2
     // edges (difference of the ENTIRE vertex properties, not just position)
@@ -2149,7 +2149,7 @@ void GraphicsSynthesizerThread::render_triangle2() {
     //           the same denominator as above
 
     // The denominator of this fraction shows up everywhere, so we compute it once.
-    float div = (e10.y * e20.x - e10.x * e20.y);
+    float div = (e10.coord.y * e20.coord.x - e10.coord.x * e20.coord.y);
 
     // If the vertices of the triangle are CCW, the denominator will be negative
     // if the triangle is degenerate (has 0 area), it will be zero.
@@ -2190,17 +2190,17 @@ void GraphicsSynthesizerThread::render_triangle2() {
     // we can get away with only checking min scissor for tops and max scissors for bottom
     // because it will give negative height triangles for completely scissored half tris
     // and the correct answer for half tris that aren't completely killed
-    int upperTop = std::max((int)std::ceil(v0.y), scissorY1); // we draw this
-    int upperBot = std::min((int)std::ceil(v1.y), scissorY2); // we don't draw this, (< max value, different from scissor)
-    int lowerTop = std::max((int)std::ceil(v1.y), scissorY1); // we draw this
-    int lowerBot = std::min((int)std::ceil(v2.y), scissorY2); // we don't draw this, (< max value, different from scissor)
+    int upperTop = std::max((int)std::ceil(v0.coord.y), scissorY1); // we draw this
+    int upperBot = std::min((int)std::ceil(v1.coord.y), scissorY2); // we don't draw this, (< max value, different from scissor)
+    int lowerTop = std::max((int)std::ceil(v1.coord.y), scissorY1); // we draw this
+    int lowerBot = std::min((int)std::ceil(v2.coord.y), scissorY2); // we don't draw this, (< max value, different from scissor)
 
 
     // compute the derivatives of the weights, like shown in the formula above
-    float ndw2dy = e10.x / div; // n is negative
-    float dw2dx  = e10.y / div;
-    float dw1dy  = e20.x / div;
-    float ndw1dx = e20.y / div; // also negative
+    float ndw2dy = e10.coord.x / div; // n is negative
+    float dw2dx  = e10.coord.y / div;
+    float dw1dy  = e20.coord.x / div;
+    float ndw1dx = e20.coord.y / div; // also negative
 
     // derivatives wrt x and y would normally be computed as dz/dx = dw0/dx * z0 + dw1/dx * z1 + dw2/dx * z2
     // however, w0 + w1 + w2 = 1 so dw0/dx + dw1/dx + dw2/dx = 0,
@@ -2217,9 +2217,9 @@ void GraphicsSynthesizerThread::render_triangle2() {
     VertexF dvdy = e10 * dw1dy - e20 * ndw2dy;
 
     // slopes of the edges
-    float e20dxdy = e20.x / e20.y;
-    float e21dxdy = e21.x / e21.y;
-    float e10dxdy = e10.x / e10.y;
+    float e20dxdy = e20.coord.x / e20.coord.y;
+    float e21dxdy = e21.coord.x / e21.coord.y;
+    float e10dxdy = e10.coord.x / e10.coord.y;
 
     // we need to know the left/right side slopes. They can be different if v1 is on the opposite side of e20
     float lowerLeftEdgeStep  = reversed ? e20dxdy : e21dxdy;
@@ -2236,8 +2236,8 @@ void GraphicsSynthesizerThread::render_triangle2() {
             //             * v2                 * v2
             VertexF& left_vertex = reversed ? v0 : v1;
             VertexF& right_vertex = reversed ? v1 : v0;
-            render_half_triangle(left_vertex.x,    // upper edge left vertex, floating point pixels
-                                 right_vertex.x,   // upper edge right vertex, floating point pixels
+            render_half_triangle(left_vertex.coord.x,    // upper edge left vertex, floating point pixels
+                                 right_vertex.coord.x,   // upper edge right vertex, floating point pixels
                                  upperTop,         // start scanline (included)
                                  lowerBot,         // end scanline   (not included)
                                  dvdx,             // derivative of values wrt x coordinate
@@ -2259,7 +2259,7 @@ void GraphicsSynthesizerThread::render_triangle2() {
         // upper triangle
         if(upperTop < upperBot) // if we weren't killed by scissoring
         {
-            render_half_triangle(v0.x, v0.x,          // upper edge is just the highest point on triangle
+            render_half_triangle(v0.coord.x, v0.coord.x,          // upper edge is just the highest point on triangle
                                  upperTop, upperBot,  // scanline bounds
                                  dvdx, dvdy,          // derivatives of values
                                  v0,                  // interpolate from this vertex
@@ -2276,12 +2276,145 @@ void GraphicsSynthesizerThread::render_triangle2() {
             //
             //
             //               * v2
-            render_half_triangle(v0.x + upperLeftEdgeStep * e10.y, // one of our upper edge vertices isn't v0,v1,v2, but we don't know which. todo is this faster than branch?
-                                 v0.x + upperRightEdgeStep * e10.y,
+            render_half_triangle(v0.coord.x + upperLeftEdgeStep * e10.coord.y, // one of our upper edge vertices isn't v0,v1,v2, but we don't know which. todo is this faster than branch?
+                                 v0.coord.x + upperRightEdgeStep * e10.coord.y,
                                  lowerTop, lowerBot, dvdx, dvdy, v1,
                                  lowerLeftEdgeStep, lowerRightEdgeStep, scissorX1, scissorX2, tex_info);
         }
 
+    }
+
+}
+
+void GraphicsSynthesizerThread::render_half_triangle_tex(float x0, float x1, int y0, int y1, VertexF &x_step,
+                                                     VertexF &y_step, VertexF &init, float step_x0, float step_x1,
+                                                     float scx1, float scx2, TexLookupInfo& tex_info) {
+
+    for(int y = y0; y < y1; y++) // loop over scanlines of triangle
+    {
+        float height = y - init.coord.y; // how far down we've made it
+        VertexF vtx_line = init + y_step * height;       // interpolate to point (x_init, y)
+        float x0l = x0 + step_x0 * height;          // start x coordinates of scanline from interpolation
+        float x1l = x1 + step_x1 * height;          // end   x coordinate of scanline from interpolation
+        x0l = std::max(scx1, std::ceil(x0l));       // round and scissor
+        x1l = std::min(scx2, std::ceil(x1l));       // round and scissor
+        int xStop = x1l;                            // integer start/stop pixels
+        int xStart = x0l;
+
+        if(xStop == xStart) continue;               // skip rows of zero length
+
+        //vtx += (x_step * (x0l - init.coord.x));           // interpolate to point (x0l, y)
+
+        for(int x = x0l; x < xStop; x++)            // loop over x pixels of scanline
+        {
+            VertexF vtx = vtx_line + (x_step * (x - init.coord.x));
+            //vtx = init + y_step * height + (x_step * (x - init.x));
+            __m128i tmp = _mm_cvtps_epi32(vtx.color.simd);
+            tmp = _mm_packs_epi32(tmp, tmp);
+            tex_info.vtx_color.rgba = _mm_cvtsi128_si64(tmp);           // set most recently interpolated stuff
+            tex_info.vtx_color.q = vtx.tex.q;
+            tex_info.fog = vtx.tex.fog;
+            int32_t u, v;
+            calculate_LOD(tex_info);
+            float s, t, q;
+            s = vtx.tex.s * 16.f;
+            t = vtx.tex.t * 16.f;
+            q = vtx.tex.q * 16.f;
+ 
+            s /= q;
+            t /= q;
+            u = (s * tex_info.tex_width) * 16.f;
+            v = (t * tex_info.tex_height) * 16.f;
+           //fprintf(stderr, "q: %f, u: %d, v: %d, a: %d\n", vtx.q, u,v, tex_info.vtx_color.a);
+#ifdef GS_JIT
+            jit_tex_lookup(u, v, &tex_info);
+            jit_draw_pixel(x * 16, y * 16, (uint32_t)vtx.coord.z, tex_info.tex_color);
+#else
+            tex_lookup(u, v, tex_info);
+            draw_pixel(x * 16, y * 16, (uint32_t)vtx.coord.z, tex_info.tex_color);
+#endif
+        }
+    }
+
+}
+
+void GraphicsSynthesizerThread::render_half_triangle_tex_uv(float x0, float x1, int y0, int y1, VertexF &x_step,
+                                                     VertexF &y_step, VertexF &init, float step_x0, float step_x1,
+                                                     float scx1, float scx2, TexLookupInfo& tex_info) {
+
+    for(int y = y0; y < y1; y++) // loop over scanlines of triangle
+    {
+        float height = y - init.coord.y; // how far down we've made it
+        VertexF vtx_line = init + y_step * height;       // interpolate to point (x_init, y)
+        float x0l = x0 + step_x0 * height;          // start x coordinates of scanline from interpolation
+        float x1l = x1 + step_x1 * height;          // end   x coordinate of scanline from interpolation
+        x0l = std::max(scx1, std::ceil(x0l));       // round and scissor
+        x1l = std::min(scx2, std::ceil(x1l));       // round and scissor
+        int xStop = x1l;                            // integer start/stop pixels
+        int xStart = x0l;
+
+        if(xStop == xStart) continue;               // skip rows of zero length
+
+        //vtx += (x_step * (x0l - init.coord.x));           // interpolate to point (x0l, y)
+
+        for(int x = x0l; x < xStop; x++)            // loop over x pixels of scanline
+        {
+            VertexF vtx = vtx_line + (x_step * (x - init.coord.x));
+            //vtx = init + y_step * height + (x_step * (x - init.x));
+            __m128i tmp = _mm_cvtps_epi32(vtx.color.simd);
+            tmp = _mm_packs_epi32(tmp, tmp);
+            tex_info.vtx_color.rgba = _mm_cvtsi128_si64(tmp);           // set most recently interpolated stuff
+            tex_info.vtx_color.q = vtx.tex.q;
+            tex_info.fog = vtx.tex.fog;
+            int32_t u, v;
+            calculate_LOD(tex_info);
+            u = (uint32_t) vtx.tex.u;
+            v = (uint32_t) vtx.tex.v;
+#ifdef GS_JIT
+            jit_tex_lookup(u, v, &tex_info);
+            jit_draw_pixel(x * 16, y * 16, (uint32_t)vtx.coord.z, tex_info.tex_color);
+#else
+            tex_lookup(u, v, tex_info);
+            draw_pixel(x * 16, y * 16, (uint32_t)vtx.coord.z, tex_info.tex_color);
+#endif
+        }
+    }
+
+}
+void GraphicsSynthesizerThread::render_half_triangle_vanilla(float x0, float x1, int y0, int y1, VertexF &x_step,
+                                                     VertexF &y_step, VertexF &init, float step_x0, float step_x1,
+                                                     float scx1, float scx2, TexLookupInfo& tex_info) {
+
+    for(int y = y0; y < y1; y++) // loop over scanlines of triangle
+    {
+        float height = y - init.coord.y; // how far down we've made it
+        VertexF vtx_line = init + y_step * height;       // interpolate to point (x_init, y)
+        float x0l = x0 + step_x0 * height;          // start x coordinates of scanline from interpolation
+        float x1l = x1 + step_x1 * height;          // end   x coordinate of scanline from interpolation
+        x0l = std::max(scx1, std::ceil(x0l));       // round and scissor
+        x1l = std::min(scx2, std::ceil(x1l));       // round and scissor
+        int xStop = x1l;                            // integer start/stop pixels
+        int xStart = x0l;
+
+        if(xStop == xStart) continue;               // skip rows of zero length
+
+        //vtx += (x_step * (x0l - init.coord.x));           // interpolate to point (x0l, y)
+
+        for(int x = x0l; x < xStop; x++)            // loop over x pixels of scanline
+        {
+            VertexF vtx = vtx_line + (x_step * (x - init.coord.x));
+            //vtx = init + y_step * height + (x_step * (x - init.x));
+            __m128i tmp = _mm_cvtps_epi32(vtx.color.simd);
+            tmp = _mm_packs_epi32(tmp, tmp);
+            tex_info.vtx_color.rgba = _mm_cvtsi128_si64(tmp);           // set most recently interpolated stuff
+            tex_info.vtx_color.q = vtx.tex.q;
+            tex_info.fog = vtx.tex.fog;
+#ifdef GS_JIT
+            jit_draw_pixel(x * 16, y * 16, (uint32_t)vtx.coord.z, tex_info.vtx_color);
+#else
+            draw_pixel(x * 16, y * 16, (uint32_t)vtx.coord.z, tex_info.vtx_color);
+#endif
+        }
     }
 
 }
@@ -2304,78 +2437,17 @@ void GraphicsSynthesizerThread::render_triangle2() {
 void GraphicsSynthesizerThread::render_half_triangle(float x0, float x1, int y0, int y1, VertexF &x_step,
                                                      VertexF &y_step, VertexF &init, float step_x0, float step_x1,
                                                      float scx1, float scx2, TexLookupInfo& tex_info) {
-
-    bool tmp_tex = current_PRMODE->texture_mapping;
-    bool tmp_uv = !current_PRMODE->use_UV;
-
-    for(int y = y0; y < y1; y++) // loop over scanlines of triangle
-    {
-        float height = y - init.y; // how far down we've made it
-        VertexF vtx = init + y_step * height;       // interpolate to point (x_init, y)
-        float x0l = x0 + step_x0 * height;          // start x coordinates of scanline from interpolation
-        float x1l = x1 + step_x1 * height;          // end   x coordinate of scanline from interpolation
-        x0l = std::max(scx1, std::ceil(x0l));       // round and scissor
-        x1l = std::min(scx2, std::ceil(x1l));       // round and scissor
-        int xStop = x1l;                            // integer start/stop pixels
-        int xStart = x0l;
-
-        if(xStop == xStart) continue;               // skip rows of zero length
-
-        vtx += (x_step * (x0l - init.x));           // interpolate to point (x0l, y)
-
-        for(int x = x0l; x < xStop; x++)            // loop over x pixels of scanline
-        {
-            //vtx = init + y_step * height + (x_step * (x - init.x));
-            tex_info.vtx_color.r = vtx.r;           // set most recently interpolated stuff
-            tex_info.vtx_color.g = vtx.g;
-            tex_info.vtx_color.b = vtx.b;
-            tex_info.vtx_color.a = vtx.a;
-            tex_info.vtx_color.q = vtx.q;
-            tex_info.fog = vtx.fog;
-            if (tmp_tex)
-            {
-                int32_t u, v;
-                calculate_LOD(tex_info);
-                if (tmp_uv)
-                {
-                    float s, t, q;
-                    s = vtx.s * 16.f;
-                    t = vtx.t * 16.f;
-                    q = vtx.q * 16.f;
-
-                    s /= q;
-                    t /= q;
-                    u = (s * tex_info.tex_width) * 16.f;
-                    v = (t * tex_info.tex_height) * 16.f;
-                    //fprintf(stderr, "q: %f, u: %d, v: %d, a: %d\n", vtx.q, u,v, tex_info.vtx_color.a);
-                }
-                else
-                {
-                    u = (uint32_t) vtx.u;
-                    v = (uint32_t) vtx.v;
-                }
-#ifdef GS_JIT
-                jit_tex_lookup(u, v, &tex_info);
-                jit_draw_pixel(x * 16, y * 16, (uint32_t)vtx.z, tex_info.tex_color);
-#else
-                tex_lookup(u, v, tex_info);
-                draw_pixel(x * 16, y * 16, (uint32_t)vtx.z, tex_info.tex_color);
-#endif
-
-            }
-            else
-            {
-#ifdef GS_JIT
-                jit_draw_pixel(x * 16, y * 16, (uint32_t)vtx.z, tex_info.vtx_color);
-#else
-                draw_pixel(x * 16, y * 16, (uint32_t)vtx.z, tex_info.vtx_color);
-#endif
-            }
-
-            vtx += x_step;                       // get values for the adjacent pixel
+    if (current_PRMODE->texture_mapping) {
+        if (current_PRMODE->use_UV) {
+            render_half_triangle_tex_uv(x0, x1, y0, y1, x_step, y_step, init, step_x0, step_x1, scx1, scx2, tex_info);
+        }
+        else {
+            render_half_triangle_tex(x0, x1, y0, y1, x_step, y_step, init, step_x0, step_x1, scx1, scx2, tex_info);
         }
     }
-
+    else {
+        render_half_triangle_vanilla(x0, x1, y0, y1, x_step, y_step, init, step_x0, step_x1, scx1, scx2, tex_info);
+    }
 }
 
 void GraphicsSynthesizerThread::render_triangle()

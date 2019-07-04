@@ -5,6 +5,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <cstdint>
+#include <immintrin.h>
 #include "gscontext.hpp"
 #include "gsregisters.hpp"
 #include "circularFIFO.hpp"
@@ -175,7 +176,12 @@ struct PRMODE_REG
 struct RGBAQ_REG
 {
     //We make them 16-bit to handle potential overflows
-    int16_t r, g, b, a;
+    union {
+		struct {
+    		int16_t r, g, b, a;
+		};
+		uint64_t rgba;
+	};
     float q;
 };
 
@@ -258,79 +264,117 @@ uint32_t addr_PSMCT16SZ(uint32_t block, uint32_t width, uint32_t x, uint32_t y);
 uint32_t addr_PSMCT8(uint32_t block, uint32_t width, uint32_t x, uint32_t y);
 uint32_t addr_PSMCT4(uint32_t block, uint32_t width, uint32_t x, uint32_t y);
 
+struct COLOR_FLOAT {
+    union {
+        struct {
+            float r, g, b, a;
+        };
+        __m128 simd;
+    };
+};
+
+struct TEX_FLOAT {
+    union {
+        struct {
+            float q, fog;
+            union {
+                struct {
+                    float u, v;
+                };
+                struct {
+                    float s, t;
+                };
+            };
+        };
+        __m128 simd;
+    };
+};
+
+struct COORD_FLOAT {
+    union {
+        struct {
+            double z;
+            float x, y;
+        };
+        __m128 simd_float;
+        __m128d simd_double;
+    };
+};
+
 struct VertexF
 {
-    union {
-        struct
-        {
-            float x,y,w,r,g,b,a,q,u,v,s,t,fog;
-        };
-        float data[13];
-    };
-    double z;
+    struct COORD_FLOAT coord;
+    struct COLOR_FLOAT color;
+    struct TEX_FLOAT tex;
 
     VertexF()
     {
 
     }
 
-    VertexF(Vertex& vert)
+    VertexF(Vertex& vert, PRMODE_REG* current_PRMODE)
     {
-        x = (float)vert.x / 16.f;
-        y = (float)vert.y / 16.f;
-        z = vert.z;
-        r = vert.rgbaq.r;
-        g = vert.rgbaq.g;
-        b = vert.rgbaq.b;
-        a = vert.rgbaq.a;
-        q = vert.rgbaq.q;
-        u = vert.uv.u;
-        v = vert.uv.v;
-        s = vert.s;
-        t = vert.t;
-        fog = vert.fog;
+        coord.x = (float)vert.x / 16.f;
+        coord.y = (float)vert.y / 16.f;
+        coord.z = vert.z;
+        color.r = vert.rgbaq.r;
+        color.g = vert.rgbaq.g;
+        color.b = vert.rgbaq.b;
+        color.a = vert.rgbaq.a;
+        tex.q = vert.rgbaq.q;
+        // TODO these lines aren't quite right with the union
+        if (current_PRMODE->use_UV) {
+            tex.u = vert.uv.u;
+            tex.v = vert.uv.v;
+        }
+        else {
+            tex.s = vert.s;
+            tex.t = vert.t;
+        }
+        tex.fog = vert.fog;
     }
 
     VertexF operator-(const VertexF& rhs)
     {
         VertexF result;
-        for(int i = 0; i < 13; i++)
-        {
-            result.data[i] = data[i] - rhs.data[i];
-        }
-        result.z = z - rhs.z;
+        result.coord.x = coord.x - rhs.coord.x;
+        result.coord.y = coord.y - rhs.coord.y;
+        result.coord.z = coord.z - rhs.coord.z;
+        result.color.simd = _mm_sub_ps(color.simd, rhs.color.simd);
+        result.tex.simd = _mm_sub_ps(tex.simd, rhs.tex.simd);
         return result;
     }
 
     VertexF operator+(const VertexF& rhs)
     {
         VertexF result;
-        for(int i = 0; i < 13; i++)
-        {
-            result.data[i] = data[i] + rhs.data[i];
-        }
-        result.z = z + rhs.z;
+        result.coord.x = coord.x + rhs.coord.x;
+        result.coord.y = coord.y + rhs.coord.y;
+        result.coord.z = coord.z + rhs.coord.z;
+        result.color.simd = _mm_add_ps(color.simd, rhs.color.simd);
+        result.tex.simd = _mm_add_ps(tex.simd, rhs.tex.simd);
         return result;
     }
 
     VertexF& operator+=(const VertexF& rhs)
     {
-        for(int i = 0; i < 13; i++)
-        {
-            data[i] = data[i] + rhs.data[i];
-        }
-        z += rhs.z;
+        coord.x = coord.x + rhs.coord.x;
+        coord.y = coord.y + rhs.coord.y;
+        coord.z = coord.z + rhs.coord.z;
+        color.simd = _mm_add_ps(color.simd, rhs.color.simd);
+        tex.simd = _mm_add_ps(tex.simd, rhs.tex.simd);
         return *this;
     }
 
     VertexF operator*(float mult)
     {
         VertexF result;
-        for(int i = 0; i < 13; i++)
-        {
-            result.data[i] = data[i] * mult;
-        }
-        result.z = z * mult;
+        __m128 simdmult = _mm_set1_ps(mult);
+        result.coord.x = coord.x * mult;
+        result.coord.y = coord.y * mult;
+        result.coord.z = coord.z * mult;
+        result.color.simd = _mm_mul_ps(color.simd, simdmult);
+        result.tex.simd = _mm_mul_ps(tex.simd, simdmult);
         return result;
     }
 };
@@ -491,6 +535,12 @@ class GraphicsSynthesizerThread
         void render_triangle();
         void render_triangle2();
         void render_half_triangle(float x0, float x1, int y0, int y1, VertexF& x_step, VertexF& y_step, VertexF& init,
+                float step_x0, float step_x1, float scx1, float scx2, TexLookupInfo& tex_info);
+        void render_half_triangle_vanilla(float x0, float x1, int y0, int y1, VertexF& x_step, VertexF& y_step, VertexF& init,
+                float step_x0, float step_x1, float scx1, float scx2, TexLookupInfo& tex_info);
+        void render_half_triangle_tex(float x0, float x1, int y0, int y1, VertexF& x_step, VertexF& y_step, VertexF& init,
+                float step_x0, float step_x1, float scx1, float scx2, TexLookupInfo& tex_info);
+        void render_half_triangle_tex_uv(float x0, float x1, int y0, int y1, VertexF& x_step, VertexF& y_step, VertexF& init,
                 float step_x0, float step_x1, float scx1, float scx2, TexLookupInfo& tex_info);
         void render_sprite();
         void write_HWREG(uint64_t data);
